@@ -625,6 +625,34 @@ def update_follow_up(
         setattr(db_obj, field, value)
     db.commit()
     db.refresh(db_obj)
+
+    # 跟进事项关闭/解决时联动关闭提醒，确保关闭后不再重复生成
+    if update_data.get("status") in (
+        FollowUpStatus.RESOLVED,
+        FollowUpStatus.CLOSED,
+    ):
+        from .services.reminders import (
+            close_reminder,
+            ReminderError,
+        )
+
+        active_reminder = (
+            db.query(models.CapacityReminder)
+            .filter(
+                models.CapacityReminder.follow_up_id == follow_up_id,
+                models.CapacityReminder.active.is_(True),
+            )
+            .first()
+        )
+        if active_reminder:
+            try:
+                close_reminder(
+                    db,
+                    active_reminder.id,
+                    reason=f"关联跟进事项变更为「{db_obj.status.value}」",
+                )
+            except ReminderError:
+                pass
     return db_obj
 
 

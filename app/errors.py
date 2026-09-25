@@ -18,6 +18,7 @@ ERROR_NOT_FOUND = {
     "approval": "尚未立项",
     "capacity_report": "产能登记不存在",
     "follow_up": "跟进事项不存在",
+    "reminder": "提醒不存在",
     "capacity_curve": "产能曲线数据不存在",
 }
 

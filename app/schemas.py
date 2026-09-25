@@ -12,6 +12,8 @@ from .enums import (
     MilestoneType,
     FollowUpStatus,
     FollowUpPriority,
+    ReminderStatus,
+    ReminderEventType,
 )
 
 
@@ -580,6 +582,147 @@ class CapacityOverviewStatistics(BaseModel):
     total_local_procurement_10k: float
     parks: List[ParkCapacityStatistics]
     categories: List[CategoryCapacityStatistics]
+
+
+# ---------------------------------------------------------------- 提醒编排
+
+class ReminderGenerateRequest(BaseModel):
+    project_ids: Optional[List[int]] = Field(
+        None, description="为空时对全部已投产项目生成"
+    )
+    timezone: str = Field("Asia/Shanghai", description="排期与日期边界使用的时区")
+    holidays: List[date] = Field(
+        default_factory=list, description="节假日顺延规则由调用方提供：放假日期"
+    )
+    weekend: List[int] = Field(
+        default_factory=list,
+        description="需要顺延的星期，0=周一…6=周日，如双休传 [5,6]",
+    )
+
+
+class CapacityReminderOut(BaseModel):
+    id: int
+    project_id: int
+    follow_up_id: Optional[int] = None
+    status: ReminderStatus
+    active: bool
+    next_remind_at: datetime
+    remind_date: date
+    timezone: str
+    assignee: Optional[str] = None
+    claimed_by: Optional[str] = None
+    claimed_at: Optional[datetime] = None
+    contact_count: int
+    closed_at: Optional[datetime] = None
+    close_reason: Optional[str] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ReminderClaimRequest(BaseModel):
+    claimed_by: str = Field(..., min_length=1, description="领取人标识")
+    expected_assignee: Optional[str] = Field(
+        None, description="乐观锁：仅当责任人仍为该值时可领（并发防重复领取）"
+    )
+
+
+class ReminderClaimForAssigneeRequest(BaseModel):
+    assignee: str = Field(..., min_length=1, description="要代领/确认的责任人")
+    claimed_by: Optional[str] = Field(None, description="领取人，默认同责任人")
+    limit: int = Field(50, ge=1, le=500)
+
+
+class ReminderPostponeRequest(BaseModel):
+    days: int = Field(..., ge=1, description="延期天数（自次日起算，仍走顺延）")
+    reason: str = Field(..., min_length=1, description="延期原因")
+    actor: Optional[str] = None
+    holidays: List[date] = Field(default_factory=list)
+    weekend: List[int] = Field(default_factory=list)
+
+
+class ReminderBatchPostponeRequest(ReminderPostponeRequest):
+    reminder_ids: List[int] = Field(..., min_length=1)
+
+
+class ReminderTransferRequest(BaseModel):
+    to_assignee: str = Field(..., min_length=1)
+    actor: Optional[str] = None
+    reason: Optional[str] = None
+
+
+class ReminderCloseRequest(BaseModel):
+    reason: str = Field(..., min_length=1)
+    actor: Optional[str] = None
+
+
+class ReminderContactRequest(BaseModel):
+    contacted_by: str = Field(..., min_length=1)
+    contacted_at: Optional[datetime] = None
+    channel: Optional[str] = None
+    content: Optional[str] = None
+    interval_days: Optional[int] = Field(None, ge=1)
+    holidays: List[date] = Field(default_factory=list)
+    weekend: List[int] = Field(default_factory=list)
+    close: bool = False
+    close_reason: Optional[str] = None
+
+
+class ReminderEventOut(BaseModel):
+    seq: int
+    event_type: ReminderEventType
+    actor: Optional[str] = None
+    from_assignee: Optional[str] = None
+    to_assignee: Optional[str] = None
+    from_status: Optional[ReminderStatus] = None
+    to_status: Optional[ReminderStatus] = None
+    scheduled_at: Optional[datetime] = None
+    scheduled_date: Optional[date] = None
+    reason: Optional[str] = None
+    detail: Optional[dict] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ReminderContactOut(BaseModel):
+    id: int
+    contacted_by: str
+    contacted_at: datetime
+    channel: Optional[str] = None
+    content: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ReminderBasisResponse(BaseModel):
+    reminder_id: int
+    project_id: int
+    status: ReminderStatus
+    active: bool
+    assignee: Optional[str] = None
+    claimed_by: Optional[str] = None
+    chain: List[str]
+    next_remind_at: datetime
+    remind_date: date
+    timezone: str
+    basis: dict
+    contact_count: int
+    closed_at: Optional[datetime] = None
+    close_reason: Optional[str] = None
+    events: List[ReminderEventOut]
+    contacts: List[ReminderContactOut]
+
+
+class ReminderGenerateResponse(BaseModel):
+    generated: List[int]
+    skipped: List[int]
+    failed: List[dict]
+
+
+class ReminderBatchPostponeResponse(BaseModel):
+    postponed: List[int]
+    skipped: List[dict]
 
 
 Project.model_rebuild()

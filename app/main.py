@@ -2,8 +2,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .database import Base, engine
-from .routers import entities, parks, projects, workflow, statistics, capacity
+from .database import Base, engine, SessionLocal
+from .routers import entities, parks, projects, workflow, statistics, capacity, reminders
+from .services.reminders import mark_due_reminders
 
 Base.metadata.create_all(bind=engine)
 
@@ -46,3 +47,17 @@ app.include_router(projects.router, prefix=prefix)
 app.include_router(workflow.router, prefix=prefix)
 app.include_router(statistics.router, prefix=prefix)
 app.include_router(capacity.router, prefix=prefix)
+app.include_router(reminders.router, prefix=prefix)
+
+
+@app.on_event("startup")
+def _recover_due_reminders_on_restart():
+    """重启补偿：提醒排期全部持久化在数据库中，启动时把已到期的
+    「已排期」提醒推进为「已到期」，保证服务重启后继续处理到期事项。"""
+    db = SessionLocal()
+    try:
+        mark_due_reminders(db)
+    except Exception:  # noqa: BLE001
+        db.rollback()
+    finally:
+        db.close()

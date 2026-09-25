@@ -74,3 +74,20 @@ class FollowUpPriority(str, Enum):
     MEDIUM = "中"
     HIGH = "高"
     URGENT = "紧急"
+
+
+class ReminderStatus(str, Enum):
+    SCHEDULED = "已排期"
+    DUE = "已到期"
+    CLAIMED = "已领取"
+    CLOSED = "已关闭"
+
+
+class ReminderEventType(str, Enum):
+    GENERATED = "生成"
+    REARMED = "重新排期"
+    DUE = "到期"
+    CLAIMED = "领取"
+    POSTPONED = "延期"
+    TRANSFERRED = "转交"
+    CLOSED = "关闭"

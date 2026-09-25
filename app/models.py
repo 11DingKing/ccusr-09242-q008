@@ -7,6 +7,8 @@ from sqlalchemy import (
     ForeignKey,
     Text,
     Date,
+    Boolean,
+    UniqueConstraint,
     Enum as SAEnum,
 )
 from sqlalchemy.orm import relationship
@@ -23,6 +25,8 @@ from .enums import (
     MilestoneType,
     FollowUpStatus,
     FollowUpPriority,
+    ReminderStatus,
+    ReminderEventType,
 )
 
 
@@ -175,6 +179,18 @@ class Project(Base):
         back_populates="project",
         cascade="all, delete-orphan",
         order_by="CapacityFollowUp.created_at.desc()",
+    )
+    capacity_reminders = relationship(
+        "CapacityReminder",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        order_by="CapacityReminder.next_remind_at",
+    )
+    contact_logs = relationship(
+        "CapacityContactLog",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        order_by="CapacityContactLog.contacted_at.desc()",
     )
 
 
@@ -362,3 +378,91 @@ class CapacityFollowUp(Base):
 
     project = relationship("Project", back_populates="capacity_follow_ups")
     report = relationship("MonthlyCapacityReport")
+
+
+class CapacityReminder(Base):
+    """提醒编排主表：一个项目同时只有一条未关闭提醒（dedup_key 唯一约束保证）。"""
+
+    __tablename__ = "capacity_reminders"
+    __table_args__ = (
+        UniqueConstraint("dedup_key", name="uq_reminder_dedup_key"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    follow_up_id = Column(Integer, ForeignKey("capacity_follow_ups.id"), index=True)
+    # 去重键：未关闭提醒固定为 f"project:{project_id}"，关闭后保留原行并释放键
+    dedup_key = Column(String(128), nullable=False)
+    active = Column(Boolean, nullable=False, default=True, index=True)
+    status = Column(
+        SAEnum(ReminderStatus),
+        nullable=False,
+        default=ReminderStatus.SCHEDULED,
+        index=True,
+    )
+    # 排期按本地时区计算，统一存储为带时区语义的 UTC 绝对时刻（naive UTC）
+    next_remind_at = Column(DateTime, nullable=False, index=True)
+    remind_date = Column(Date, nullable=False)
+    timezone = Column(String(64), nullable=False, default="Asia/Shanghai")
+    # 生成依据快照：承诺产能、达产率、上次联系时间、命中策略与顺延明细
+    basis = Column(Text, nullable=False)
+    # 处理链：首位为初始责任人，转交时追加
+    chain = Column(Text, nullable=False, default="[]")
+    assignee = Column(String(64), index=True)
+    claimed_by = Column(String(64), index=True)
+    claimed_at = Column(DateTime)
+    contact_count = Column(Integer, nullable=False, default=0)
+    closed_at = Column(DateTime)
+    close_reason = Column(String(512))
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    project = relationship("Project", back_populates="capacity_reminders")
+    events = relationship(
+        "CapacityReminderEvent",
+        back_populates="reminder",
+        cascade="all, delete-orphan",
+        order_by="CapacityReminderEvent.seq",
+    )
+
+
+class CapacityReminderEvent(Base):
+    """提醒处理链事件流：生成/到期/领取/延期/转交/关闭全程留痕。"""
+
+    __tablename__ = "capacity_reminder_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    reminder_id = Column(
+        Integer, ForeignKey("capacity_reminders.id"), nullable=False, index=True
+    )
+    seq = Column(Integer, nullable=False)
+    event_type = Column(SAEnum(ReminderEventType), nullable=False, index=True)
+    actor = Column(String(64))
+    from_assignee = Column(String(64))
+    to_assignee = Column(String(64))
+    from_status = Column(SAEnum(ReminderStatus))
+    to_status = Column(SAEnum(ReminderStatus))
+    scheduled_at = Column(DateTime)
+    scheduled_date = Column(Date)
+    reason = Column(Text)
+    detail = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    reminder = relationship("CapacityReminder", back_populates="events")
+
+
+class CapacityContactLog(Base):
+    """企业联系记录，作为「上次联系时间」的唯一可信来源。"""
+
+    __tablename__ = "capacity_contact_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    reminder_id = Column(Integer, ForeignKey("capacity_reminders.id"), index=True)
+    contacted_by = Column(String(64), nullable=False)
+    contacted_at = Column(DateTime, nullable=False, index=True)
+    channel = Column(String(32))
+    content = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    project = relationship("Project", back_populates="contact_logs")
