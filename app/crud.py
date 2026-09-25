@@ -31,6 +31,7 @@ from .services.statistics import (
     get_capacity_overview_statistics as _svc_get_capacity_overview,
     get_project_capacity_curve_data as _svc_get_capacity_curve,
 )
+from .services.reminders import cancel_open_reminders_for_follow_up
 
 
 def get_entity(db: Session, entity_id: int):
@@ -620,9 +621,19 @@ def update_follow_up(
     db_obj = get_follow_up(db, follow_up_id)
     if not db_obj:
         return None
+    old_status = db_obj.status
     update_data = obj_in.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(db_obj, field, value)
+    new_status = db_obj.status
+    terminal_statuses = (FollowUpStatus.RESOLVED, FollowUpStatus.CLOSED)
+    if new_status in terminal_statuses and old_status not in terminal_statuses:
+        # 关闭/解决后不再生成提醒，未结提醒一并取消
+        cancel_open_reminders_for_follow_up(
+            db,
+            follow_up_id=db_obj.id,
+            reason=f"跟进事项已{new_status.value}，未结提醒自动取消",
+        )
     db.commit()
     db.refresh(db_obj)
     return db_obj
@@ -634,6 +645,57 @@ def delete_follow_up(db: Session, follow_up_id: int):
         db.delete(db_obj)
         db.commit()
     return db_obj
+
+
+def get_reminder(db: Session, reminder_id: int):
+    return (
+        db.query(models.FollowUpReminder)
+        .filter(models.FollowUpReminder.id == reminder_id)
+        .first()
+    )
+
+
+def list_reminders(
+    db: Session,
+    owner: Optional[str] = None,
+    status: Optional[str] = None,
+    follow_up_id: Optional[int] = None,
+    project_id: Optional[int] = None,
+    due_only: bool = False,
+    now: Optional[datetime] = None,
+    skip: int = 0,
+    limit: int = 100,
+):
+    query = db.query(models.FollowUpReminder)
+    if owner:
+        query = query.filter(models.FollowUpReminder.owner == owner)
+    if status:
+        query = query.filter(models.FollowUpReminder.status == status)
+    if follow_up_id:
+        query = query.filter(models.FollowUpReminder.follow_up_id == follow_up_id)
+    if project_id:
+        query = query.filter(models.FollowUpReminder.project_id == project_id)
+    if due_only:
+        current = now or datetime.utcnow()
+        query = query.filter(
+            models.FollowUpReminder.is_open == True,  # noqa: E712
+            models.FollowUpReminder.due_at <= current,
+        )
+    return (
+        query.order_by(models.FollowUpReminder.due_at.asc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+
+
+def list_reminder_events(db: Session, reminder_id: int):
+    return (
+        db.query(models.FollowUpReminderEvent)
+        .filter(models.FollowUpReminderEvent.reminder_id == reminder_id)
+        .order_by(models.FollowUpReminderEvent.id)
+        .all()
+    )
 
 
 def get_project_capacity_curve(db: Session, project_id: int):

@@ -19,6 +19,7 @@ ERROR_NOT_FOUND = {
     "capacity_report": "产能登记不存在",
     "follow_up": "跟进事项不存在",
     "capacity_curve": "产能曲线数据不存在",
+    "reminder": "提醒事项不存在",
 }
 
 ERROR_DUPLICATE = {

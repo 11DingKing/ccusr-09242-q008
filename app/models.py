@@ -7,7 +7,11 @@ from sqlalchemy import (
     ForeignKey,
     Text,
     Date,
+    Boolean,
     Enum as SAEnum,
+    Index,
+    JSON,
+    text,
 )
 from sqlalchemy.orm import relationship
 from datetime import datetime
@@ -23,6 +27,8 @@ from .enums import (
     MilestoneType,
     FollowUpStatus,
     FollowUpPriority,
+    FollowUpReminderStatus,
+    ReminderEventType,
 )
 
 
@@ -357,8 +363,85 @@ class CapacityFollowUp(Base):
     responsible_person = Column(String(64))
     deadline = Column(Date)
     resolution = Column(Text)
+    last_contact_at = Column(DateTime)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     project = relationship("Project", back_populates="capacity_follow_ups")
     report = relationship("MonthlyCapacityReport")
+    reminders = relationship(
+        "FollowUpReminder",
+        back_populates="follow_up",
+        cascade="all, delete-orphan",
+        order_by="FollowUpReminder.created_at.desc()",
+    )
+
+
+class FollowUpReminder(Base):
+    """产能跟进提醒：按承诺产能、达产率与上次联系时间编排下一次联系窗口。"""
+
+    __tablename__ = "follow_up_reminders"
+    __table_args__ = (
+        Index(
+            "uq_follow_up_reminders_open",
+            "follow_up_id",
+            unique=True,
+            sqlite_where=text("is_open = 1"),
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    follow_up_id = Column(
+        Integer, ForeignKey("capacity_follow_ups.id"), nullable=False, index=True
+    )
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    owner = Column(String(64), index=True)
+    status = Column(
+        SAEnum(FollowUpReminderStatus),
+        nullable=False,
+        default=FollowUpReminderStatus.PENDING,
+        index=True,
+    )
+    due_at = Column(DateTime, nullable=False, index=True)
+    timezone = Column(String(64), nullable=False, default="Asia/Shanghai")
+    interval_days = Column(Integer, nullable=False, default=30)
+    utilization_rate = Column(Float)
+    gap_percentage = Column(Float)
+    basis = Column(JSON)
+    defer_reason = Column(Text)
+    deferred_count = Column(Integer, nullable=False, default=0)
+    version = Column(Integer, nullable=False, default=1)
+    is_open = Column(Boolean, nullable=False, default=True)
+    claimed_at = Column(DateTime)
+    completed_at = Column(DateTime)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    follow_up = relationship("CapacityFollowUp", back_populates="reminders")
+    events = relationship(
+        "FollowUpReminderEvent",
+        back_populates="reminder",
+        cascade="all, delete-orphan",
+        order_by="FollowUpReminderEvent.id",
+    )
+
+
+class FollowUpReminderEvent(Base):
+    """提醒处理链：生成、到期、领取、延期、转交、处理、取消全程留痕。"""
+
+    __tablename__ = "follow_up_reminder_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    reminder_id = Column(
+        Integer, ForeignKey("follow_up_reminders.id"), nullable=False, index=True
+    )
+    follow_up_id = Column(Integer, nullable=False, index=True)
+    event_type = Column(SAEnum(ReminderEventType), nullable=False, index=True)
+    actor = Column(String(64))
+    from_owner = Column(String(64))
+    to_owner = Column(String(64))
+    reason = Column(Text)
+    detail = Column(JSON)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    reminder = relationship("FollowUpReminder", back_populates="events")

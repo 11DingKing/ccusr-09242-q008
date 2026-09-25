@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field, ConfigDict
 from datetime import datetime, date
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
 from .enums import (
     Region,
@@ -12,6 +12,8 @@ from .enums import (
     MilestoneType,
     FollowUpStatus,
     FollowUpPriority,
+    FollowUpReminderStatus,
+    ReminderEventType,
 )
 
 
@@ -506,6 +508,7 @@ class CapacityFollowUpBase(BaseModel):
     responsible_person: Optional[str] = None
     deadline: Optional[date] = None
     resolution: Optional[str] = None
+    last_contact_at: Optional[datetime] = None
 
 
 class CapacityFollowUpCreate(CapacityFollowUpBase):
@@ -522,6 +525,7 @@ class CapacityFollowUpUpdate(BaseModel):
     responsible_person: Optional[str] = None
     deadline: Optional[date] = None
     resolution: Optional[str] = None
+    last_contact_at: Optional[datetime] = None
 
 
 class CapacityFollowUp(CapacityFollowUpBase):
@@ -580,6 +584,124 @@ class CapacityOverviewStatistics(BaseModel):
     total_local_procurement_10k: float
     parks: List[ParkCapacityStatistics]
     categories: List[CategoryCapacityStatistics]
+
+
+class FollowUpReminder(BaseModel):
+    id: int
+    follow_up_id: int
+    project_id: int
+    owner: Optional[str] = None
+    status: FollowUpReminderStatus
+    due_at: datetime
+    timezone: str
+    interval_days: int
+    utilization_rate: Optional[float] = None
+    gap_percentage: Optional[float] = None
+    defer_reason: Optional[str] = None
+    deferred_count: int
+    version: int
+    claimed_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class FollowUpReminderEvent(BaseModel):
+    id: int
+    reminder_id: int
+    follow_up_id: int
+    event_type: ReminderEventType
+    actor: Optional[str] = None
+    from_owner: Optional[str] = None
+    to_owner: Optional[str] = None
+    reason: Optional[str] = None
+    detail: Optional[Dict[str, Any]] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ReminderGenerateRequest(BaseModel):
+    project_id: Optional[int] = Field(None, description="按项目筛选，缺省为全部投产跟进事项")
+    follow_up_id: Optional[int] = Field(None, description="指定单个跟进事项")
+    timezone: str = Field("Asia/Shanghai", description="节假日顺延与基准时间使用的时区")
+    holidays: List[date] = Field(default_factory=list, description="调用方提供的节假日日期")
+    defer_weekends: bool = Field(True, description="到期日落在周末时是否顺延")
+    as_of: Optional[datetime] = Field(None, description="编排基准时间，缺省为当前时间；naive 时按 timezone 解释")
+
+
+class ReminderGenerateItem(BaseModel):
+    follow_up_id: int
+    result: str
+    reminder_id: Optional[int] = None
+    reason: Optional[str] = None
+
+
+class ReminderGenerateResponse(BaseModel):
+    generated_count: int
+    skipped_count: int
+    items: List[ReminderGenerateItem]
+
+
+class ReminderProcessDueRequest(BaseModel):
+    timezone: str = Field("Asia/Shanghai", description="naive as_of 的解释时区")
+    as_of: Optional[datetime] = Field(None, description="扫描基准时间，缺省为当前时间")
+
+
+class ReminderProcessDueResponse(BaseModel):
+    processed_count: int
+    reminder_ids: List[int]
+
+
+class ReminderClaimRequest(BaseModel):
+    owner: str = Field(..., min_length=1, max_length=64, description="领取人（责任人）")
+    reminder_ids: List[int] = Field(..., min_length=1)
+
+
+class ReminderDeferRequest(BaseModel):
+    reminder_ids: List[int] = Field(..., min_length=1)
+    defer_until: Optional[date] = Field(None, description="延期到指定日期（保留原时刻）")
+    defer_days: Optional[int] = Field(None, ge=1, le=365, description="延期天数，与 defer_until 二选一")
+    reason: str = Field(..., min_length=1, description="延期原因（必填）")
+    operator: Optional[str] = None
+
+
+class ReminderTransferRequest(BaseModel):
+    to_owner: str = Field(..., min_length=1, max_length=64, description="接收责任人")
+    reason: Optional[str] = None
+    operator: Optional[str] = None
+    expected_version: Optional[int] = Field(None, description="乐观锁版本号，不一致时拒绝转交")
+
+
+class ReminderCompleteRequest(BaseModel):
+    contacted_at: Optional[datetime] = Field(None, description="实际联系时间，缺省为当前时间")
+    note: Optional[str] = None
+    operator: Optional[str] = None
+
+
+class ReminderBatchItemResult(BaseModel):
+    reminder_id: int
+    ok: bool
+    error: Optional[str] = None
+
+
+class ReminderBatchResponse(BaseModel):
+    results: List[ReminderBatchItemResult]
+
+
+class ReminderCompleteResponse(BaseModel):
+    reminder_id: int
+    status: FollowUpReminderStatus
+    next_reminder_id: Optional[int] = None
+
+
+class ReminderBasisResponse(BaseModel):
+    reminder_id: int
+    follow_up_id: int
+    project_id: int
+    basis: Dict[str, Any] = Field(default_factory=dict)
 
 
 Project.model_rebuild()
